@@ -90,6 +90,15 @@ def isArticle(word):
         return True
 
 def matchconfidence(search, match):
+    def cleanWord(word):
+        #Remove any puncuation from the end for a better match
+        if word.isalpha():
+            return word
+        else:
+            while not word.isalpha():
+                word = word[:-1]
+        return word
+
     search = search.lower()
     match = match.lower()
     confidence = 0
@@ -112,7 +121,10 @@ def matchconfidence(search, match):
 
         for i, sword in enumerate(searchWords):
             #if not isArticle(sword):
+            sword = cleanWord(sword)
+
             for n, mword in enumerate(matchWords):
+                mword = cleanWord(mword)
                 if IgnoreArticles and isArticle(sword):
                     #print('Ignore: ' + sword)
                     break
@@ -137,6 +149,16 @@ def matchconfidence(search, match):
                     confidence += maxConfidencePerWord - adjustor
 
     return round(confidence, 2)
+
+def searchForSeries(series):
+    #API
+    try:
+        rs = requests.post('https://api.mangaupdates.com/v1/series/search', data={'search': series, 'perpage': 10})
+        return rs.json()
+    except Exception as e:
+        print('Failed to connect: ' + e)
+        return False
+        #sys.exit('Failed to connect: ' + e)
 
 def getSeriesInfo(series_id, hit_title, service):
     try:
@@ -387,7 +409,7 @@ if FilenameSplit:
             NotASCII = False
 
         #Strip hyphon. Naruto chapter 353 - The fight for noodles.
-        if ftext.startswith('-'):
+        if ftext.startswith('-') or ftext.startswith('~'):
             #Lone hyphon?
             if len(ftext) == 1:
                 #ftext = ''
@@ -397,12 +419,18 @@ if FilenameSplit:
             if not ftext[1:] in ['san', 'chan', 'sama', 'dono', 'kun']:
                 AfterHyphon = True
                 SkipWordFromSearch = True
+        
+        #Strip hyphon end of word
+        if ftext.endswith('-') or ftext.endswith('~'):
+            ftext = ftext[:-1]
 
         if AfterHyphon:
-            if ftext.startswith('-'):
-                PossibleChapterTitleText += ' ' + ftext[1:]
+            if ftext.startswith('-') or ftext.startswith('~'):
+                if not AfterChapter:
+                    PossibleChapterTitleText += ' ' + ftext[1:]
             else:
-                PossibleChapterTitleText += ' ' + ftext
+                if not AfterChapter:
+                    PossibleChapterTitleText += ' ' + ftext
 
         #Last chars are numbers assume issue number.
         #if i == len(FilenameSplit): MangaInfo['Number'] = ftext
@@ -429,15 +457,20 @@ if FilenameSplit:
             if MangaInfo['Number'] == '':
                 #print('Check for naruto263 type')
                 renum = re.search('([A-Za-z]+)(\d+)', ftext)
-                if renum is not None: MangaInfo['Number'] = renum.group(2)
-                #Alter text to remove number from search.
-                ftext = renum.group(1)
+                if renum is not None:
+                    MangaInfo['Number'] = renum.group(2)
+                    #Alter text to remove number from search.
+                    ftext = renum.group(1)
         #Build search title
         #if (not AfterChapter or not NotASCII) or (not AfterChapter and not NotASCII):
         if not SkipWordFromSearch and ftext:
             #print('add to search')
             #if not AfterChapter: print('not AfterChapter')
             SearchForTitle += ' ' + ftext
+
+#Clean up titles
+SearchForTitle = SearchForTitle.strip()
+PossibleChapterTitleText = PossibleChapterTitleText.strip()
 
 #Enter a suspected title. Can overwrite later if data comes in.
 if PossibleChapterTitleText: MangaInfo['Title'] = PossibleChapterTitleText
@@ -446,28 +479,42 @@ if PossibleChapterTitleText: MangaInfo['Title'] = PossibleChapterTitleText
 #searchForTags = re.search('\[.*\](.*)', SearchForTitle)
 #if searchForTags is not None: SearchForTitle = searchForTags.group(1)
 
-#API
-try:
-    rs = requests.post('https://api.mangaupdates.com/v1/series/search', data={'search': SearchForTitle.strip()})
-    SearchResult = rs.json()
-except Exception as e:
-    sys.exit('Failed to connect: ' + e)
-    
-
-#Instead of trying to order the json, create a lookup table.
+SearchResult = searchForSeries(SearchForTitle)
 lookupTable = []
 
-def buildMenu(confidenceLevel, op):
+def resultListOrdered():
+    listUnordered = {}
+    listOrderedIndex = []
+    for k, v in enumerate(SearchResult['results']):
+        listUnordered[k] = SearchResult['results'][k]['record']['confidence']
+    listOrdered = sorted(listUnordered.items(), key=lambda x: x[1], reverse=True)
+    for k, v in listOrdered:
+        listOrderedIndex.append(k)
+    return listOrderedIndex
+
+"""def resultList(confidenceLevel, op):
+    #Instead of trying to order the json, create a lookup table.
+    lookupTable = []
     for k, v in enumerate(SearchResult['results']):
         if  op(SearchResult['results'][k]['record']['confidence'], confidenceLevel):
             lookupTable.append(k)
-            #print(str(k) + ' :  ' + str(SearchResult['results'][k]['record']['title']) + '[' + str(SearchResult['results'][k]['record']['confidence']) + '%]')
-            print(str(len(lookupTable)) + ' :  ' + str(SearchResult['results'][k]['hit_title']) + '[' + str(SearchResult['results'][k]['record']['confidence']) + '%]')
-            #print(str(orderListNum) + ' :  ' + str(SearchResult['results'][k]['hit_title']) + '[' + str(SearchResult['results'][k]['record']['confidence']) + '%]')
+            #print(str(len(lookupTable)) + ' :  ' + str(SearchResult['results'][k]['hit_title']) + '[' + str(SearchResult['results'][k]['record']['confidence']) + '%]')
+    if len(lookupTable) == 0:
+        resultList(50, operator.lt)
+
+    return lookupTable"""
+
+def buildMenu():
+    for k, v in enumerate(lookupTable):
+        print(str(k+1) + ' :  ' + str(SearchResult['results'][v]['hit_title']) + ' [' + str(SearchResult['results'][v]['record']['confidence']) + '%]')
+
+    #items = resultList(confidenceLevel, op)
+
     print('e: Show low confidence titles')
     print('m: Enter search title manually')
+    print('t: Search for possible chapter title: ' + PossibleChapterTitleText)
     print('q: Quit')
-    print('Searched for: ' + SearchForTitle.strip())
+    print('Searched for: ' + SearchForTitle)
 
 for k, v in enumerate(SearchResult['results']):
     #Confidence value: words as a percentage of matches. Maybe then weight number of letters in word?
@@ -475,7 +522,8 @@ for k, v in enumerate(SearchResult['results']):
     #print(str(k) + ' :  ' + str(SearchResult['results'][k]['record']['title']) + '[' + str(confidence) + '%]')
     SearchResult['results'][k]['record']['confidence'] = confidence
 
-buildMenu(50, operator.gt)
+lookupTable = resultListOrdered()
+buildMenu()
 
 def processChoice(choice):
     if choice.isnumeric():
@@ -490,7 +538,7 @@ def processChoice(choice):
             seriesID = str(SearchResult['results'][clookup]['record']['series_id'])
         except:
             print('Failed to get series info.')
-            buildMenu(50, operator.gt)
+            buildMenu()
 
         if seriesID:
             seriesInfo = getSeriesInfo(seriesID, SearchResult['results'][clookup]['hit_title'], 'MU')
@@ -498,15 +546,18 @@ def processChoice(choice):
             if seriesInfo: formatSeries(seriesInfo)
         else:
             print('Failed to get series info.')
-            buildMenu(50, operator.gt)
+            buildMenu()
     else:
         if choice == 'q': sys.exit('Exiting. Nothing written')
         elif choice == 'e':
             print('Low confidence titles:')
-            buildMenu(50, operator.lt)
+            buildMenu()
             inputChoice()
         elif choice == 'm':
             #TODO Manual entry
+            pass
+        elif choice == 't':
+            #TODO Search possible chapter title
             pass
             
 def inputChoice():
@@ -537,6 +588,7 @@ elif not FileNextTo and not DryRun:
         if not ziphasfile(FullFilenamePath, 'ComicInfo.xml'):
             with zipfile.ZipFile(FullFilenamePath, 'a') as zipped_f:
                 zipped_f.writestr('ComicInfo.xml', outputXML)
+            print('Wrote ComicInfo.xml')
         else:
             print('ComicInfo.xml already exists!')
             with zipfile.ZipFile(FullFilenamePath, 'r') as zipped_f:
