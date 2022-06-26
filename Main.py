@@ -113,8 +113,12 @@ def matchconfidence(search, match):
         #lenDiff = abs(lenDiff) +1
         #Alter value based on difference between lengths
         if lenDiff:
-            maxConfidencePerWord = 100 / len(matchWords)
-            confidenceWeightAdjust = maxConfidencePerWord / lenDiff #len(searchWords)
+            if len(searchWords) > len(matchWords):
+                maxConfidencePerWord = 100 / len(searchWords)
+                confidenceWeightAdjust = maxConfidencePerWord / lenDiff #len(searchWords)
+            else:
+                maxConfidencePerWord = 100 / len(matchWords)
+                confidenceWeightAdjust = maxConfidencePerWord / lenDiff #len(searchWords)
         else:
             #Lengths match
             maxConfidencePerWord = 100 / len(searchWords)
@@ -150,10 +154,10 @@ def matchconfidence(search, match):
 
     return round(confidence, 2)
 
-def searchForSeries(series):
+def searchForSeries(series, perpage = 10):
     #API
     try:
-        rs = requests.post('https://api.mangaupdates.com/v1/series/search', data={'search': series, 'perpage': 10})
+        rs = requests.post('https://api.mangaupdates.com/v1/series/search', data={'search': series, 'perpage': perpage})
         return rs.json()
     except Exception as e:
         print('Failed to connect: ' + e)
@@ -479,7 +483,7 @@ if PossibleChapterTitleText: MangaInfo['Title'] = PossibleChapterTitleText
 #searchForTags = re.search('\[.*\](.*)', SearchForTitle)
 #if searchForTags is not None: SearchForTitle = searchForTags.group(1)
 
-SearchResult = searchForSeries(SearchForTitle)
+SearchResult = searchForSeries(SearchForTitle, 25)
 lookupTable = []
 
 def resultListOrdered():
@@ -508,20 +512,20 @@ def buildMenu():
     for k, v in enumerate(lookupTable):
         print(str(k+1) + ' :  ' + str(SearchResult['results'][v]['hit_title']) + ' [' + str(SearchResult['results'][v]['record']['confidence']) + '%]')
 
-    #items = resultList(confidenceLevel, op)
-
-    print('e: Show low confidence titles')
+    #print('e: Show low confidence titles')
     print('m: Enter search title manually')
     print('t: Search for possible chapter title: ' + PossibleChapterTitleText)
     print('q: Quit')
     print('Searched for: ' + SearchForTitle)
 
-for k, v in enumerate(SearchResult['results']):
-    #Confidence value: words as a percentage of matches. Maybe then weight number of letters in word?
-    confidence = matchconfidence(SearchForTitle.strip(), str(SearchResult['results'][k]['hit_title']))
-    #print(str(k) + ' :  ' + str(SearchResult['results'][k]['record']['title']) + '[' + str(confidence) + '%]')
-    SearchResult['results'][k]['record']['confidence'] = confidence
+def addConfidence():
+    for k, v in enumerate(SearchResult['results']):
+        #Confidence value: words as a percentage of matches. Maybe then weight number of letters in word?
+        confidence = matchconfidence(SearchForTitle.strip(), str(SearchResult['results'][k]['hit_title']))
+        #print(str(k) + ' :  ' + str(SearchResult['results'][k]['record']['title']) + '[' + str(confidence) + '%]')
+        SearchResult['results'][k]['record']['confidence'] = confidence
 
+addConfidence()
 lookupTable = resultListOrdered()
 buildMenu()
 
@@ -530,11 +534,13 @@ def processChoice(choice):
         clookup = None
         seriesID = None
         try:
+            global lookupTable
             clookup = lookupTable[int(choice)-1]
-        except:
-            print('Bad ID number.')
+        except Exception as e:
+            print('Bad ID number. ' + e.args[0])
             inputChoice()
         try:
+            global SearchResult
             seriesID = str(SearchResult['results'][clookup]['record']['series_id'])
         except:
             print('Failed to get series info.')
@@ -542,7 +548,6 @@ def processChoice(choice):
 
         if seriesID:
             seriesInfo = getSeriesInfo(seriesID, SearchResult['results'][clookup]['hit_title'], 'MU')
-            #seriesInfo = requests.get('https://api.mangaupdates.com/v1/series/' + str(SearchResult['results'][clookup]['record']['series_id']))
             if seriesInfo: formatSeries(seriesInfo)
         else:
             print('Failed to get series info.')
@@ -555,10 +560,19 @@ def processChoice(choice):
             inputChoice()
         elif choice == 'm':
             #TODO Manual entry
-            pass
+            manInput = input('Enter title: ')
+            SearchResult = searchForSeries(manInput)
+            addConfidence()
+            lookupTable = resultListOrdered()
+            buildMenu()
+            inputChoice()
         elif choice == 't':
             #TODO Search possible chapter title
-            pass
+            SearchResult = searchForSeries(PossibleChapterTitleText)
+            addConfidence()
+            lookupTable = resultListOrdered()
+            buildMenu()
+            inputChoice()
             
 def inputChoice():
     choice = input('Enter number: ')
@@ -571,10 +585,8 @@ outputXML = '<?xml version=\'1.0\' encoding=\'utf-8\'?>\n'
 outputXML += '<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">\n'
 for item in MangaInfo:
     if MangaInfo[item]:
-        #print(MangaInfo[item])
         outputXML += '  <' + item + '>' + str(MangaInfo[item]) + '</' + item + '>\n'
 outputXML += '</ComicInfo>'
-#print(outputXML)
 
 #Output xml file next to comic file with <filename>.xml
 if FileNextTo and not DryRun:
@@ -594,6 +606,8 @@ elif not FileNextTo and not DryRun:
             with zipfile.ZipFile(FullFilenamePath, 'r') as zipped_f:
                 print('Current ComicInfo.xml:')
                 print(zipped_f.read('ComicInfo.xml'))
+                print('Overwrite with information from: ' + MangaInfo['Series'])
+                #print(outputXML)
             choiceOverwrite = input('Overwrite? Y/N: ')
             if choiceOverwrite.lower() == 'y':
                 print('Overwriting file...')
