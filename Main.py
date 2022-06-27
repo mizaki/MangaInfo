@@ -5,7 +5,7 @@
 import sys
 import os
 from pathlib import Path
-import re
+import regex as re
 import operator
 import requests
 import zipfile
@@ -13,6 +13,7 @@ from unrar.cffi import rarfile
 import tempfile
 import subprocess
 import shutil
+from thefuzz import fuzz
 
 #Command line options
 FileNextTo = False
@@ -24,11 +25,66 @@ SplitBy = ' '
 
 #Globals
 ComicFileType = ''
-SearchForTitle = ''
+#SearchForTitle = ''
+ParsedFilename = {}
 FilenameSplit = ''
-#Store for non-alpha i.e. Japanese.
-AltSearchForTitle = ''
-PossibleChapterTitleText = ''
+#TODO Store for non-alpha i.e. Japanese.
+#AltSearchForTitle = ''
+#PossibleChapterTitleText = ''
+
+def parseFilename(name):
+    #From Comic Tagger
+    #volume_regex = r"v(?:|ol|olume)\.?\s?"
+
+    filenameInfo = {'title':'', 'series':'', 'non-english':'', 'group': '', 'issue':0, 'volume':0, 'year':0, 'remainder':''}
+
+    #Find any non-European
+    reg = re.compile(r'[\p{Lo}]+')
+    regMatch = reg.findall(name)
+    if regMatch is not None:
+        filenameInfo['non-english'] = ' '.join(regMatch)
+        name = reg.sub('', name)
+
+    #Find and remove group
+    reg = re.compile(r'^\[(.*)\]')
+    regMatch = reg.search(name)
+    if regMatch is not None:
+        filenameInfo['group'] = regMatch.group(1)
+        name = reg.sub('', name)
+
+    #Find and remove chapter/issue
+    reg = re.compile(r'ch(?:|ap|apter)\.?.(\d+)', re.IGNORECASE)
+    regMatch = reg.search(name)
+    if regMatch is not None:
+        filenameInfo['issue'] = regMatch.group(1)
+        name = reg.sub('', name)
+
+    #Find and remove volume
+    reg = re.compile(r'v(?:|ol|olume)\.?.(\d+)', re.IGNORECASE)
+    regMatch = reg.search(name)
+    if regMatch is not None:
+        filenameInfo['volume'] = regMatch.group(1)
+        name = reg.sub('', name)
+
+    #Find possible chapter title
+    reg = re.compile(r'[-|~](.*)[-|~]')
+    regMatch = reg.search(name)
+    if regMatch is not None:
+        filenameInfo['title'] = regMatch.group(1).strip()
+        name = reg.sub('', name)
+
+    #Find year
+    reg = re.compile(r'\((\d{4})(-(\d{4}|)|)\)')
+    regMatch = reg.search(name)
+    if regMatch is not None:
+        if regMatch.group(1).startswith('19') or regMatch.group(1).startswith('20'):
+            filenameInfo['year'] = regMatch.group(1)
+            name = reg.sub('', name)
+
+    #What's left is series?
+    filenameInfo['series'] = name.strip()
+
+    return filenameInfo
 
 def ziphasfile(zipname, filename):
     if filename is None: return None
@@ -89,18 +145,16 @@ def isArticle(word):
     if word in articles:
         return True
 
-def matchconfidence(search, match):
+"""def matchconfidence(search, match):
+    #return fuzz.ratio(search.lower(), match.lower())
     def cleanWord(word):
-        #Remove any puncuation from the end for a better match
-        if word.isalpha():
-            return word
-        else:
-            while not word.isalpha():
-                word = word[:-1]
+        word = re.sub('[^\w\s]', '', word)
         return word
 
     search = search.lower()
     match = match.lower()
+    search = cleanWord(search)
+    match = cleanWord(match)
     confidence = 0
     confidenceWordCount = 0
     confidenceWeightAdjust = 0
@@ -126,9 +180,11 @@ def matchconfidence(search, match):
         for i, sword in enumerate(searchWords):
             #if not isArticle(sword):
             sword = cleanWord(sword)
-
+            #Empty after clean, break.
+            if not sword: break
             for n, mword in enumerate(matchWords):
                 mword = cleanWord(mword)
+                if not mword: break
                 if IgnoreArticles and isArticle(sword):
                     #print('Ignore: ' + sword)
                     break
@@ -152,7 +208,7 @@ def matchconfidence(search, match):
                     #print('adjustor: ' + str(adjustor))
                     confidence += maxConfidencePerWord - adjustor
 
-    return round(confidence, 2)
+    return round(confidence, 2)"""
 
 def searchForSeries(series, perpage = 10):
     #API
@@ -338,11 +394,12 @@ if FilenameExt in ['.cb7', '.7z']: ComicFileType = '7z'
 
 
 #Parse Filename
+"""
 AfterChapter = False
 AfterHyphon = False
 NotASCII = False
 SkipWordFromSearch = False
-
+"""
 #Split filename by spaces default then search for underscore.
 if ManualSplit:
     FilenameSplit = Filename.split(SplitBy)
@@ -355,7 +412,7 @@ else:
         if len(Filename.split('_')) > 1:
             FilenameSplit = Filename.split('_')
 
-
+"""
 if FilenameSplit:
     for i, ftext in enumerate(FilenameSplit):
         #print(i,ftext)
@@ -471,19 +528,24 @@ if FilenameSplit:
             #print('add to search')
             #if not AfterChapter: print('not AfterChapter')
             SearchForTitle += ' ' + ftext
-
+"""
+ParsedFilename = parseFilename(Filename)
 #Clean up titles
-SearchForTitle = SearchForTitle.strip()
-PossibleChapterTitleText = PossibleChapterTitleText.strip()
+#SearchForTitle = SearchForTitle.strip()
+#PossibleChapterTitleText = PossibleChapterTitleText.strip()
 
 #Enter a suspected title. Can overwrite later if data comes in.
-if PossibleChapterTitleText: MangaInfo['Title'] = PossibleChapterTitleText
+if ParsedFilename['title']: MangaInfo['Title'] = ParsedFilename['title']
+#Use data from filename. Can overwrite later.
+if ParsedFilename['issue']: MangaInfo['Number'] = ParsedFilename['issue']
+if ParsedFilename['volume']: MangaInfo['Volume'] = ParsedFilename['volume']
+if ParsedFilename['year']: MangaInfo['Year'] = ParsedFilename['year']
 
 #Strip [ ] tags.
 #searchForTags = re.search('\[.*\](.*)', SearchForTitle)
 #if searchForTags is not None: SearchForTitle = searchForTags.group(1)
 
-SearchResult = searchForSeries(SearchForTitle, 25)
+SearchResult = searchForSeries(ParsedFilename['series'])
 lookupTable = []
 
 def resultListOrdered():
@@ -496,38 +558,28 @@ def resultListOrdered():
         listOrderedIndex.append(k)
     return listOrderedIndex
 
-"""def resultList(confidenceLevel, op):
-    #Instead of trying to order the json, create a lookup table.
-    lookupTable = []
-    for k, v in enumerate(SearchResult['results']):
-        if  op(SearchResult['results'][k]['record']['confidence'], confidenceLevel):
-            lookupTable.append(k)
-            #print(str(len(lookupTable)) + ' :  ' + str(SearchResult['results'][k]['hit_title']) + '[' + str(SearchResult['results'][k]['record']['confidence']) + '%]')
-    if len(lookupTable) == 0:
-        resultList(50, operator.lt)
-
-    return lookupTable"""
-
-def buildMenu():
+def buildMenu(searchTerm):
+    print('# : Search Title - (Original Title) [Confidence]')
+    print('-------------------------------------------------')
     for k, v in enumerate(lookupTable):
-        print(str(k+1) + ' :  ' + str(SearchResult['results'][v]['hit_title']) + ' [' + str(SearchResult['results'][v]['record']['confidence']) + '%]')
+        print(str(k+1) + ' : ' + str(SearchResult['results'][v]['hit_title']) + ' - (' + str(SearchResult['results'][v]['record']['title']) + ') [' + str(SearchResult['results'][v]['record']['confidence']) + '%]')
 
     #print('e: Show low confidence titles')
     print('m: Enter search title manually')
-    print('t: Search for possible chapter title: ' + PossibleChapterTitleText)
+    if ParsedFilename['title']: print('t: Search for possible chapter title: ' + ParsedFilename['title'])
+    if ParsedFilename['non-english']: print('n: Search with non-English term: ' + ParsedFilename['non-english'])
     print('q: Quit')
-    print('Searched for: ' + SearchForTitle)
+    print('Searched for: ' + searchTerm)
 
-def addConfidence():
+def addConfidence(series):
     for k, v in enumerate(SearchResult['results']):
-        #Confidence value: words as a percentage of matches. Maybe then weight number of letters in word?
-        confidence = matchconfidence(SearchForTitle.strip(), str(SearchResult['results'][k]['hit_title']))
-        #print(str(k) + ' :  ' + str(SearchResult['results'][k]['record']['title']) + '[' + str(confidence) + '%]')
+        #Confidence value via thefuzz
+        confidence = fuzz.ratio(series.lower(), str(SearchResult['results'][k]['hit_title'].lower()))
         SearchResult['results'][k]['record']['confidence'] = confidence
 
-addConfidence()
+addConfidence(ParsedFilename['series'])
 lookupTable = resultListOrdered()
-buildMenu()
+buildMenu(ParsedFilename['series'])
 
 def processChoice(choice):
     if choice.isnumeric():
@@ -559,19 +611,26 @@ def processChoice(choice):
             buildMenu()
             inputChoice()
         elif choice == 'm':
-            #TODO Manual entry
+            #Manual entry
             manInput = input('Enter title: ')
             SearchResult = searchForSeries(manInput)
-            addConfidence()
+            addConfidence(manInput)
             lookupTable = resultListOrdered()
-            buildMenu()
+            buildMenu(manInput)
             inputChoice()
         elif choice == 't':
-            #TODO Search possible chapter title
-            SearchResult = searchForSeries(PossibleChapterTitleText)
-            addConfidence()
+            #Search possible chapter title
+            SearchResult = searchForSeries(ParsedFilename['title'])
+            addConfidence(ParsedFilename['title'])
             lookupTable = resultListOrdered()
-            buildMenu()
+            buildMenu(ParsedFilename['title'])
+            inputChoice()
+        elif choice == 'n':
+            #Search non-English words found
+            SearchResult = searchForSeries(ParsedFilename['non-english'])
+            addConfidence(ParsedFilename['non-english'])
+            lookupTable = resultListOrdered()
+            buildMenu(ParsedFilename['non-english'])
             inputChoice()
             
 def inputChoice():
@@ -641,7 +700,7 @@ elif not FileNextTo and not DryRun:
                 if externalRar:
                     try:
                         #Create a tempory file to add to rar archive
-                        #TODO file permission on ComicInfo.xml
+                        #TODO file permission on ComicInfo.xml - Only seems to be an issue when extracted? Linux only problem?
                         subprocess.run(['rar', 'a', FullFilenamePath, '-ep', '-siComicInfo.xml'], input=bytes(outputXML, 'UTF-8'))
                     except Exception as e:
                         print(e)
